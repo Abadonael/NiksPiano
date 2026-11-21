@@ -1,0 +1,16 @@
+Salamander Grand Piano V3 by Alexander Holm
+Original release: https://archive.org/details/SalamanderGrandPianoV3
+Sample source: https://github.com/sfzinstruments/SalamanderGrandPiano/tree/3382bf9496bba2486f5ab0de55a264d1dfc38404
+The FLAC repack and SFZ tuning and start offsets are from the kinwie remap.
+License: Creative Commons Attribution 3.0 Unported (CC BY 3.0)
+https://creativecommons.org/licenses/by/3.0/
+See LICENSE.txt for the full license.
+
+Adapted for Niks Piano. Uses only velocity layer 8, sampled in minor thirds.
+The recordings are retuned with the upstream Retuned offsets, trimmed,
+peak-normalized, faded, and resampled to stereo 44.1 kHz 16-bit PCM.
+The original 17 training samples (MIDI 36–84) are also used in Free Piano.
+Free Piano adds 13 recorded anchors for MIDI 21–33 and 87–108. The new
+bass samples retain up to seven seconds and the new treble samples up to
+four seconds of the recorded decay. Free Piano playback applies fine tuning
+based on the measured fundamental of each recording.
