@@ -5,6 +5,7 @@ const TARGET_INK := Color("#ffd480")
 const VERTICAL_PAD := 0.48
 const BAR_SPACE := 19.4
 const INTERVAL_SPACE := 8.2
+const SCALE_BAR_SPACE := 12.4
 const ANSWER_HEIGHT := 32.0
 const ANSWER_BOTTOM_MARGIN := 7.0
 
@@ -61,10 +62,15 @@ func note_ink(index: int) -> Color:
 
 
 func _header_width() -> float:
-	return 5.25 + 0.98 * absi(_exercise.key_signature)
+	var prelude := 4.25 if _exercise.study == Exercises.Study.TRIAD else 5.25
+	return prelude + 0.98 * absi(_exercise.key_signature)
 
 
 func _bar_width() -> float:
+	if _exercise.study == Exercises.Study.SCALE:
+		return SCALE_BAR_SPACE
+	if _exercise.study == Exercises.Study.TRIAD:
+		return INTERVAL_SPACE
 	return INTERVAL_SPACE if _exercise.kind == Exercises.Kind.INTERVAL else BAR_SPACE
 
 
@@ -75,8 +81,9 @@ func _notation_height() -> float:
 func staff_space() -> float:
 	if _exercise == null:
 		return 0.0
+	var bars := _exercise.measures.size() if _exercise.study == Exercises.Study.SCALE else 1
 	return maxf(0.0, minf(_notation_height() / (_rise + _drop + 2.0 * VERTICAL_PAD),
-		(size.x - 4.0) / (_header_width() + _bar_width())))
+		(size.x - 4.0) / (_header_width() + _bar_width() * bars)))
 
 
 func visible_measures() -> Vector2i:
@@ -112,7 +119,7 @@ func _draw_header(left: float, bottom: float, space: float, first_page: bool) ->
 	for index in range(steps.size()):
 		_draw_symbol(_accidental(signi(_exercise.key_signature)), left + (2.95 + 0.98 * index) * space,
 			steps[index], bottom, space)
-	if first_page:
+	if first_page and _exercise.study != Exercises.Study.TRIAD:
 		var x := left + (3.47 + 0.98 * steps.size()) * space
 		_draw_symbol(char(0xE080 + _exercise.time_signature.x), x, 6, bottom, space)
 		_draw_symbol(char(0xE080 + _exercise.time_signature.y), x, 2, bottom, space)
@@ -124,11 +131,21 @@ func _draw_measure(index: int, left: float, bottom: float, space: float) -> void
 	for slot in range(measure.events.size()):
 		var event := measure.events[slot]
 		var x := left + (2.35 + slot * 3.45 + elapsed * 0.25) * space
+		if _exercise.study == Exercises.Study.SCALE:
+			x = left + (1.9 + slot * 2.95) * space
 		if event.pitches.is_empty():
 			var rest := "\uE4E4" if event.duration == Exercises.HALF else "\uE4E5"
 			_draw_symbol(rest, x - 0.5 * space, 4, bottom, space)
 		elif event.pitches.size() == 2:
 			_draw_interval(event, _signs[index][slot], left + 3.75 * space, bottom, space)
+		elif event.pitches.size() == 3:
+			var chord_x := left + 4.1 * space
+			for voice in range(event.pitches.size()):
+				var step := event.pitches[voice].staff_step(_exercise.clef)
+				_draw_head(chord_x, step, event.duration, bottom, space, note_ink(event.attack))
+				var sign: int = _signs[index][slot][voice]
+				if sign != Exercises.NO_SIGN:
+					_draw_symbol(_accidental(sign), chord_x - 2.15 * space, step, bottom, space)
 		else:
 			var step := event.pitches[0].staff_step(_exercise.clef)
 			var ink := note_ink(event.attack)
@@ -196,4 +213,4 @@ func _draw_symbol(glyph: String, x: float, step: int, bottom: float, space: floa
 
 
 static func _accidental(sign: int) -> String:
-	return ["\uE260", "\uE261", "\uE262"][sign + 1]
+	return ["\uE264", "\uE260", "\uE261", "\uE262", "\uE263"][sign + 2]

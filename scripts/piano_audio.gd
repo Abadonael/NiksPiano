@@ -1,6 +1,7 @@
 extends Node
 
 signal note_started(midi: int)
+signal harmony_started(midi_notes: Array[int])
 signal triad_started(midi_notes: Array[int])
 signal enabled_changed(value: bool)
 
@@ -10,6 +11,9 @@ const HIGHEST_SAMPLE := 84
 const KEY_VOICES := 10
 const TRIAD_VOICES := 3
 const FREE_VOICES := 64
+const HARMONY_INITIAL_VOICES := 64
+# Seven pitches per attack at 200 BPM can overlap several seconds of bass tails.
+const HARMONY_MAX_VOICES := 192
 const FREE_LOWEST := 21
 const FREE_HIGHEST := 108
 const KEY_DB := -3.0
@@ -60,6 +64,7 @@ var _next_key := 0
 var _fades: Dictionary[AudioStreamPlayer, Tween] = {}
 var _free_keys: Array[AudioStreamPlayer] = []
 var _free_held: Dictionary[int, AudioStreamPlayer] = {}
+var _harmony_keys: Array[AudioStreamPlayer] = []
 
 
 func _ready() -> void:
@@ -82,6 +87,7 @@ func set_enabled(value: bool) -> void:
 		fade_keys(STOP_FADE_SECONDS)
 		fade_triad(STOP_FADE_SECONDS)
 		fade_free_notes()
+		fade_harmony()
 	enabled_changed.emit(enabled)
 
 
@@ -178,6 +184,52 @@ func play_triad(midi_notes: Array[int]) -> void:
 		voice.play()
 	AudioServer.unlock()
 	triad_started.emit(midi_notes)
+
+
+func play_harmony(midi_notes: Array[int]) -> void:
+	if not enabled or midi_notes.is_empty() or midi_notes.size() > 7:
+		return
+	if _harmony_keys.is_empty():
+		for index in range(HARMONY_INITIAL_VOICES):
+			_harmony_keys.append(_new_harmony_voice())
+	var voices: Array[AudioStreamPlayer] = []
+	for midi in midi_notes:
+		var voice := _take_harmony_voice(voices)
+		_prepare_voice(voice, midi, TRIAD_DB if midi_notes.size() <= TRIAD_VOICES else FREE_DB,
+			free_sample_midi(midi))
+		voices.append(voice)
+	AudioServer.lock()
+	for voice in voices:
+		voice.play()
+	AudioServer.unlock()
+	harmony_started.emit(midi_notes)
+
+
+func _new_harmony_voice() -> AudioStreamPlayer:
+	var voice := AudioStreamPlayer.new()
+	voice.playback_type = AudioServer.PLAYBACK_TYPE_STREAM
+	add_child(voice)
+	return voice
+
+
+func _take_harmony_voice(reserved: Array[AudioStreamPlayer]) -> AudioStreamPlayer:
+	var voice: AudioStreamPlayer
+	for candidate in _harmony_keys:
+		if not candidate.playing and candidate not in reserved:
+			voice = candidate
+			break
+	if voice != null:
+		_harmony_keys.erase(voice)
+	elif _harmony_keys.size() < HARMONY_MAX_VOICES:
+		voice = _new_harmony_voice()
+	else:
+		voice = _harmony_keys.pop_front()
+	_harmony_keys.append(voice)
+	return voice
+
+
+func fade_harmony() -> void:
+	_fade_voices(_harmony_keys, STOP_FADE_SECONDS)
 
 
 func _fade_voices(voices: Array[AudioStreamPlayer], seconds: float, damp_keys := false) -> Tween:

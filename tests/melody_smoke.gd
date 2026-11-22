@@ -8,7 +8,7 @@ const Notes := preload("res://scripts/notes.gd")
 const Chords := preload("res://scripts/chords.gd")
 const Finish := preload("res://scripts/finish.gd")
 const Theory := preload("res://tests/melody_theory.gd")
-const CAPTURES := "res://builds/screenshots/0.5.1"
+const CAPTURES := "res://builds/screenshots/0.7.2-regression/melodies"
 const RESOLUTIONS := [Vector2i(720, 405), Vector2i(900, 405), Vector2i(1280, 800), Vector2i(1600, 1000)]
 const LEVEL_NAMES := ["beginner", "intermediate", "advanced"]
 const KIND_NAMES := ["Arpeggio", "Musical phrase", "Harmonic interval"]
@@ -30,13 +30,15 @@ func run(suite: SceneTree, settings_path: String, screenshots: bool) -> void:
 	Theory.new().run(suite)
 	var portrait := _root.size
 	var menu: Control = suite.menu
-	suite.click(menu._mode_buttons[Settings.Mode.MELODIES].get_global_rect().get_center())
-	_check_menu(menu, settings_path)
+	await suite.open_mode(Settings.Mode.MELODIES)
+	await _check_menu(menu, settings_path)
 	if screenshots:
 		_expect(DirAccess.make_dir_recursive_absolute(CAPTURES) == OK, "screenshot directory is writable")
 		await _capture("melodies-menu")
+		await _suite.scroll_menu_to(menu._exercise_buttons[Exercises.Kind.INTERVAL])
 		_suite.tap(menu._exercise_buttons[Exercises.Kind.INTERVAL].get_global_rect().get_center())
 		await _capture("interval-menu")
+		await _suite.scroll_menu_to(menu._exercise_buttons[Exercises.Kind.PHRASE])
 		_suite.tap(menu._exercise_buttons[Exercises.Kind.PHRASE].get_global_rect().get_center())
 	suite.click(menu._start.get_global_rect().get_center())
 	await suite.process_frame
@@ -56,8 +58,11 @@ func run(suite: SceneTree, settings_path: String, screenshots: bool) -> void:
 	_expect(menu.visible and not _game.visible and _root.size == portrait and suite.app.size.y > suite.app.size.x
 		and _game._success.is_stopped() and _game._progress.exercise == null and _game._staff.visible_measures() == Vector2i.ZERO,
 		"Melodies restores portrait and clears the pending exercise")
+	await _suite.scroll_menu_to(menu._difficulty_buttons[0])
 	_suite.tap(menu._difficulty_buttons[0].get_global_rect().get_center())
+	await _suite.scroll_menu_to(menu._length_buttons[3])
 	_suite.tap(menu._length_buttons[3].get_global_rect().get_center())
+	await _suite.scroll_menu_to(menu._clef_buttons[0])
 	_suite.tap(menu._clef_buttons[0].get_global_rect().get_center())
 	_suite.tap(menu._start.get_global_rect().get_center())
 	await suite.process_frame
@@ -71,6 +76,7 @@ func run(suite: SceneTree, settings_path: String, screenshots: bool) -> void:
 
 
 func _check_menu(menu: Control, settings_path: String) -> void:
+	await _suite.scroll_menu_to(menu._exercise_buttons[0])
 	var exercises: Array[Button] = menu._exercise_buttons
 	var levels: Array[Button] = menu._difficulty_buttons
 	var lengths: Array[Button] = menu._length_buttons
@@ -78,24 +84,28 @@ func _check_menu(menu: Control, settings_path: String) -> void:
 	_expect(exercises[0].button_pressed and levels[0].button_pressed and lengths[0].button_pressed
 		and clefs[0].button_pressed, "Melodies defaults to beginner four-note treble arpeggios")
 	for row: Button in exercises + levels + lengths + clefs:
-		_expect(row.visible and row.get_rect().end.y < menu._start.position.y
-			and row.get_rect().end.x <= menu.size.x, "Melodies options fit above Start")
+		_expect(row.visible and menu._scroll.get_global_rect().end.y < menu._start.get_global_rect().position.y
+			and row.get_global_rect().end.x <= menu.size.x, "Melodies options fit above Start")
 	for group: Array in [levels, lengths, clefs]:
 		for index in range(group.size() - 1):
 			_expect(group[index].get_rect().end.x < group[index + 1].position.x, "choices do not overlap")
 		for row: Button in group:
+			await _suite.scroll_menu_to(row)
 			_suite.tap(row.get_global_rect().get_center())
 			_suite._check_radio_group(group, row)
+	await _suite.scroll_menu_to(exercises[2])
 	_suite.tap(exercises[2].get_global_rect().get_center())
-	_expect(not menu._length_heading.visible and lengths.all(func(row: Button) -> bool: return not row.visible)
-		and clefs[1].visible, "only length is hidden for intervals")
+	_expect(not menu._length_section.visible and lengths.all(func(row: Button) -> bool: return not row.is_visible_in_tree())
+		and clefs[1].is_visible_in_tree(), "only length is hidden for intervals")
 	var loaded := Settings.new(settings_path)
 	loaded.load_settings()
 	_expect(loaded.mode == Settings.Mode.MELODIES and loaded.melody_kind == Exercises.Kind.INTERVAL
 		and loaded.melody_difficulty == Exercises.Difficulty.ADVANCED and loaded.melody_length == 24
 		and loaded.melody_clef == Notes.Clef.BASS, "all four exercise options persist independently")
+	await _suite.scroll_menu_to(exercises[1])
 	_suite.tap(exercises[1].get_global_rect().get_center())
 	_expect(lengths[4].visible and lengths[4].button_pressed, "stored length returns when switching exercise type")
+	await _suite.scroll_menu_to(lengths[0])
 	_suite.tap(lengths[0].get_global_rect().get_center())
 	var config := ConfigFile.new()
 	config.load(settings_path)
@@ -284,12 +294,12 @@ func _check_landscape() -> void:
 
 
 func _export_samples(captures: Dictionary) -> void:
-	var path := "res://builds/0.5.1-exercise-examples.md"
+	var path := "res://builds/0.7.2-exercise-examples.md"
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	_expect(file != null, "human-readable exercise examples are writable")
 	if file == null:
 		return
-	file.store_string("# Niks Piano 0.5.1 exercise examples\n\n")
+	file.store_string("# Nik's Piano 0.7.2 exercise examples\n\n")
 	file.store_string("Pitch names use C4 for MIDI 60. Durations are shown after each event. Parentheses group pitches played together. Vertical bars divide measures. Natural-minor phrases use the unaltered scale. Patterns are original to Niks Piano.\n\n")
 	for label: String in captures:
 		_write_example(file, label.replace("-", " ").capitalize(), captures[label])

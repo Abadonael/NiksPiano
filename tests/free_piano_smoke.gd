@@ -24,16 +24,12 @@ func run(suite: SceneTree, settings_path: String, capture_all: bool) -> void:
 	var portrait := _root.size
 	var menu: Control = suite.menu
 	var free_row: Button = menu._mode_buttons[Settings.Mode.FREE_PIANO]
-	expect(free_row.text == "Свободная клавиатура" and free_row.position.y < menu._mode_buttons[0].position.y
-		and menu._mode_buttons[0].position.y < menu._mode_buttons[1].position.y
-		and menu._mode_buttons[1].position.y < menu._mode_buttons[2].position.y, "Free Piano is the first game mode")
-	_click(free_row)
-	expect(not menu._staff_rows[0].visible and not menu._naming_rows[0].visible
-		and not menu._chord_heading.visible and not menu._chord_buttons[0].visible, "Free Piano hides quiz options")
-	_click(menu._start)
+	expect(free_row.accessibility_name == "Свободная клавиатура", "Free Piano uses its full name")
+	await suite.open_mode(Settings.Mode.FREE_PIANO)
+	expect(not menu._start.visible and not menu._scroll.visible, "Free Piano has no setup page")
 	await suite.process_frame
 	expect(_free.visible and not menu.visible and _root.size.x > _root.size.y
-		and suite.app.size.x > suite.app.size.y, "Start opens Free Piano in landscape")
+		and suite.app.size.x > suite.app.size.y, "the module card opens Free Piano in landscape")
 	expect(_keys.locked and _free._lock.button_pressed and not _free._plus.visible and not _free._minus.visible,
 		"Free Piano defaults to a locked viewport")
 	expect(is_equal_approx(_free._center(), _keys.white_keys.find(60) + 0.5), "Free Piano defaults to middle C")
@@ -44,6 +40,8 @@ func run(suite: SceneTree, settings_path: String, capture_all: bool) -> void:
 		await _check_c4_markers(locked_frame)
 	_check_geometry()
 	_check_touches()
+	await _check_glissando()
+	await _check_glissando_pointers()
 	_check_navigation()
 	var center := _free._center()
 	var zoom := _free.preferences.free_zoom
@@ -58,16 +56,22 @@ func run(suite: SceneTree, settings_path: String, capture_all: bool) -> void:
 	expect(loaded.mode == Settings.Mode.FREE_PIANO and not loaded.free_locked
 		and is_equal_approx(loaded.free_zoom, zoom) and is_equal_approx(loaded.free_center, center),
 		"a settings reload restores Free Piano mode, lock, zoom and center")
-	_click(menu._start)
+	await suite.open_mode(Settings.Mode.FREE_PIANO)
 	await suite.process_frame
 	expect(not _keys.locked and is_equal_approx(_free._center(), center)
 		and is_equal_approx(_keys.key_width, _free._default_width * zoom), "reopening restores the same viewport")
 	await _check_resizing(capture_all, center, zoom)
 	await _check_audio()
 	expect(suite.triad_events.is_empty(), "Free Piano never triggers a chord demonstration")
+	var c := _keys.white_keys.find(60)
+	_suite._touch(_white_point(c), 0, true)
+	_drag(_white_point(c + 3), 0)
 	_click(_free._menu)
-	await suite.process_frame
-	print("Free Piano: verified 88 playable MIDI notes, per-pointer input, viewport navigation and settings.")
+	var stopped_count: int = _suite.note_events.size()
+	await _wait_for_attacks()
+	expect(_keys._pressed_notes().is_empty() and _audio._free_held.is_empty()
+		and _suite.note_events.size() == stopped_count, "returning to the menu clears gestures and pending attacks")
+	print("Free Piano: verified 88 notes, ordered touch glissando, bounded playback, viewport navigation and settings.")
 
 
 func _check_header_layout() -> void:
@@ -215,9 +219,8 @@ func _check_touches() -> void:
 	expect(notes == [60, 61, 60] and _keys._pressed_notes().size() == 3, "multi-touch and held-key retriggering work independently")
 	_suite._touch(first, 0, false)
 	expect(60 in _keys._pressed_notes() and 61 in _keys._pressed_notes(), "releasing one finger preserves both other fingers")
-	_drag(first + Vector2(180.0, 0.0), 2)
-	_suite._touch(first + Vector2(180.0, 0.0), 2, false)
-	expect(_keys._pressed_notes() == [61], "release outside the original key clears only that pointer")
+	_suite._touch(first, 2, false)
+	expect(_keys._pressed_notes() == [61], "release clears only that pointer")
 	_suite._touch(second, 1, false)
 	expect(_keys._pressed_notes().is_empty() and notes == [60, 61, 60]
 		and _keys.offset == initial_offset and _keys.key_width == initial_width, "lock prevents swipe, map and zoom changes")
@@ -226,6 +229,155 @@ func _check_touches() -> void:
 	_suite._touch(first, 0, true)
 	_keyboard_cancel(first, 0)
 	expect(_keys._pressed_notes().is_empty() and _audio._free_held.is_empty(), "an Android cancel clears the held key and voice")
+
+
+func _check_glissando() -> void:
+	var notes: Array[int] = _suite.note_events
+	var c := _keys.white_keys.find(60)
+	var center := _free._center()
+	_free._set_center(c + 4.0)
+	var first := _white_point(c)
+	var last := _white_point(c + 7)
+	var offset := _keys.offset
+	notes.clear()
+	_suite._touch(first, 0, true)
+	for distance in [1.0, 3.0, 2.0, 0.0]:
+		_drag(first + Vector2(distance, 0.0), 0)
+	await _wait_for_attacks()
+	expect(notes == [60] and _keys._pressed_notes() == [60], "holding and moving slightly inside C4 attacks once")
+
+	for index in range(c + 1, c + 3):
+		var point := _white_point(index)
+		_drag(point, 0)
+		_drag(point + Vector2(2.0, 0.0), 0)
+		await _wait_for_attacks()
+	expect(notes == [60, 62, 64], "closely sampled lower glissando attacks once per key boundary")
+	_drag(last, 0)
+	expect(_keys._pressed_notes() == [72], "sparse drag highlights the destination key immediately")
+	await _wait_for_attacks()
+	expect(notes == [60, 62, 64, 65, 67, 69, 71, 72], "a sparse lower sweep completes C4 to C5 without black keys")
+	_drag(first, 0)
+	await _wait_for_attacks()
+	expect(notes.slice(8) == [71, 69, 67, 65, 64, 62, 60], "reversing the same touch plays the white keys in reverse")
+	_suite._touch(first, 0, false)
+	expect(_keys.offset == offset and _audio._free_held.is_empty() and _keys._pressed_notes().is_empty(),
+		"a locked lower glissando leaves the viewport fixed and releases cleanly")
+
+	await _check_slide(_white_point(c + 4), first, [67, 65, 64, 62, 60])
+	await _check_slide(_white_point(c, 0.3), _white_point(c + 4, 0.3), [60, 61, 62, 63, 64, 65, 66, 67])
+	await _check_slide(_white_point(c, 0.3), _white_point(c + 4), [60, 61, 62, 63, 64, 65, 67])
+	var black := _keys.black_rect(c + 1)
+	var black_point := _keys.global_position + black.get_center() - Vector2(black.size.x * 0.2, 0.0)
+	await _check_slide(black_point, Vector2(black_point.x, first.y), [61, 60])
+	var outside := Vector2(first.x, _keys.global_position.y + _keys.size.y + 15.0)
+	notes.clear()
+	_suite._touch(first, 0, true)
+	_drag(outside, 0)
+	await _wait_for_attacks()
+	expect(notes == [60] and _keys._pressed_notes().is_empty() and _audio._free_held.is_empty(),
+		"dragging outside the keyboard releases the current key")
+	_drag(first, 0)
+	await _wait_for_attacks()
+	expect(notes == [60, 60] and _keys._pressed_notes() == [60], "re-entering the keyboard attacks the crossed key again")
+	_suite._touch(first, 0, false)
+	await _check_sparse_timing(c)
+	_free._set_center(center)
+
+
+func _check_slide(start: Vector2, end: Vector2, expected: Array[int]) -> void:
+	var notes: Array[int] = _suite.note_events
+	notes.clear()
+	_suite._touch(start, 0, true)
+	_drag(end, 0)
+	await _wait_for_attacks()
+	expect(notes == expected, "sparse segment plays %s in spatial order, got %s" % [expected, notes])
+	_suite._touch(end, 0, false)
+	expect(_keys._pressed_notes().is_empty() and _audio._free_held.is_empty(), "sparse segment releases the pointer")
+
+
+func _check_sparse_timing(c: int) -> void:
+	var attacks: Array[int] = []
+	var record := func(_midi: int) -> void: attacks.append(Time.get_ticks_usec())
+	var notes: Array[int] = _suite.note_events
+	notes.clear()
+	var first := _white_point(c)
+	var last := _white_point(c + 7)
+	_suite._touch(first, 0, true)
+	await _suite.create_timer(0.025).timeout
+	_audio.note_started.connect(record)
+	var moved := Time.get_ticks_usec()
+	_drag(last, 0)
+	expect(notes.size() < 8, "a single sparse octave event does not start every voice in one input callback")
+	await _wait_for_attacks()
+	_audio.note_started.disconnect(record)
+	expect(notes == [60, 62, 64, 65, 67, 69, 71, 72] and attacks.size() == 7,
+		"a single sparse octave event plays exactly the seven crossed regions")
+	if not attacks.is_empty():
+		expect(attacks[-1] - attacks[0] >= FreeKeyboard.ATTACK_SPACING_USEC
+			and attacks[-1] - moved <= FreeKeyboard.ATTACK_WINDOW_USEC + 50000,
+			"sparse attacks are spread across updates and finish within the window plus frame overhead")
+	_suite._touch(last, 0, false)
+	await _wait_for_attacks()
+	expect(notes.size() == 8 and _audio._free_held.is_empty(), "no attacks or held voices remain after completing a rapid sweep")
+
+
+func _check_glissando_pointers() -> void:
+	var c := _keys.white_keys.find(60)
+	var first := _white_point(c)
+	var last := _white_point(c + 4)
+	var notes: Array[int] = _suite.note_events
+	notes.clear()
+	_suite._touch(first, 0, true)
+	_suite._touch(first, 1, true)
+	_suite._touch(last, 2, true)
+	var held_voice: AudioStreamPlayer = _audio._free_held.get(0)
+	expect(notes == [60, 60, 67] and held_voice != null and _audio._free_held.get(1) != held_voice,
+		"two fingers on the same key get separate attacks and voices")
+	_drag(_white_point(c + 1), 1)
+	_drag(_white_point(c + 3), 2)
+	await _wait_for_attacks()
+	expect(notes == [60, 60, 67, 62, 65] and _audio._free_held.get(0) == held_voice
+		and _keys._pressed_notes() == [60, 62, 65], "two independent drags preserve the third finger and all highlights")
+	_drag(last, 1)
+	_keyboard_cancel(last, 1)
+	var canceled_count := notes.size()
+	await _wait_for_attacks()
+	expect(notes.size() == canceled_count and _keys._pressed_notes() == [60, 65]
+		and not _audio._free_held.has(1) and _audio._free_held.get(0) == held_voice and _audio._free_held.has(2),
+		"canceling a glissando discards its pending attacks and preserves other fingers")
+	_suite._touch(first, 0, false)
+	_suite._touch(_white_point(c + 3), 2, false)
+	expect(_audio._free_held.is_empty() and _keys._pressed_notes().is_empty(), "lifting all fingers clears their voices")
+
+	_suite._touch(first, 0, true)
+	_drag(last, 0)
+	_suite._touch(last, 0, false)
+	var lifted_count := notes.size()
+	await _wait_for_attacks()
+	expect(notes.size() == lifted_count and _audio._free_held.is_empty(), "lifting during a sparse batch stops deferred attacks")
+	_suite._touch(first, 0, true)
+	_drag(last, 0)
+	_root.focus_exited.emit()
+	await _wait_for_attacks()
+	expect(_audio._free_held.is_empty() and _keys._pressed_notes().is_empty(), "focus loss clears the glissando")
+	_suite._touch(last, 0, false)
+	_suite._touch(first, 0, true)
+	_drag(last, 0)
+	_free.notification(Node.NOTIFICATION_APPLICATION_PAUSED)
+	var paused_count := notes.size()
+	await _wait_for_attacks()
+	expect(notes.size() == paused_count and _keys._pressed_notes().is_empty() and _audio._free_held.is_empty(),
+		"application pause clears the glissando and suppresses pending attacks")
+	_suite._touch(last, 0, false)
+	_free.notification(Node.NOTIFICATION_APPLICATION_RESUMED)
+
+
+func _wait_for_attacks() -> void:
+	var deadline := Time.get_ticks_usec() + 85000
+	var remaining := deadline - Time.get_ticks_usec()
+	while remaining > 0:
+		await _suite.create_timer(float(remaining) / 1000000.0).timeout
+		remaining = deadline - Time.get_ticks_usec()
 
 
 func _check_navigation() -> void:
@@ -299,6 +451,7 @@ func _check_resizing(capture_all: bool, center: float, zoom: float) -> void:
 			var resized_frame: Image = await _suite.capture("free-unlocked")
 			_check_main_marker(resized_frame)
 			_check_minimap_marker(resized_frame)
+			await _check_rendered_glissando(resized_frame)
 	_root.size = original
 	await _suite.process_frame
 	if capture_all:
@@ -307,6 +460,9 @@ func _check_resizing(capture_all: bool, center: float, zoom: float) -> void:
 		_free._zoom(1.0 / FreePiano.ZOOM_STEP)
 	expect(_free._minus.disabled and is_equal_approx(_keys.key_width, _free._min_width), "zoom stops at the minimum")
 	_free._scroll(-100000.0)
+	_click(_free._lock)
+	await _check_slide(_white_point(0), _white_point(3), [21, 23, 24, 26])
+	_click(_free._lock)
 	if capture_all:
 		var left_frame: Image = await _suite.capture("free-min-left")
 		_check_minimap_marker(left_frame)
@@ -319,6 +475,9 @@ func _check_resizing(capture_all: bool, center: float, zoom: float) -> void:
 		_free._zoom(FreePiano.ZOOM_STEP)
 	expect(_free._plus.disabled and is_equal_approx(_keys.key_width, _free._max_width), "zoom stops at the maximum")
 	_free._scroll(100000.0)
+	_click(_free._lock)
+	await _check_slide(_white_point(48, 0.3), _white_point(51, 0.3), [103, 104, 105, 106, 107, 108])
+	_click(_free._lock)
 	if capture_all:
 		var right_frame: Image = await _suite.capture("free-max-right")
 		_check_minimap_marker(right_frame)
@@ -347,6 +506,39 @@ func _check_resizing(capture_all: bool, center: float, zoom: float) -> void:
 		expect(pressed_pixel.r < rest_pixel.r, "the C4 key face still darkens while pressed")
 		_suite._touch(first, 0, false)
 		_suite._touch(second, 1, false)
+		_click(_free._lock)
+		await _check_rendered_glissando(c4_frame)
+		_click(_free._lock)
+
+
+func _check_rendered_glissando(rest: Image) -> void:
+	var offset := _keys.offset
+	var width := _keys.key_width
+	_click(_free._lock)
+	expect(is_equal_approx(_keys.offset, offset) and is_equal_approx(_keys.key_width, width),
+		"locking preserves the existing viewport position and zoom")
+	var c := _keys.white_keys.find(60)
+	var first := _white_point(c)
+	var last := _white_point(c + 2)
+	var held := _keys.global_position + _keys.black_rect(c + 1).get_center()
+	_suite._touch(first, 0, true)
+	_suite._touch(held, 1, true)
+	_drag(last, 0)
+	await _wait_for_attacks()
+	var frame: Image = await _suite.capture("free-glissando")
+	var rest_first: Color = _suite._pixel(rest, first)
+	var rest_last: Color = _suite._pixel(rest, last)
+	var rest_held: Color = _suite._pixel(rest, held)
+	var gliss_first: Color = _suite._pixel(frame, first)
+	var gliss_last: Color = _suite._pixel(frame, last)
+	var gliss_held: Color = _suite._pixel(frame, held)
+	expect(gliss_first == rest_first and gliss_last.r < rest_last.r and gliss_held.r > rest_held.r,
+		"rendered glissando restores the old key, darkens the new white key and keeps the held black key pressed")
+	_check_main_marker(frame)
+	_check_minimap_marker(frame)
+	_suite._touch(last, 0, false)
+	_suite._touch(held, 1, false)
+	_click(_free._lock)
 
 
 func _check_audio() -> void:
@@ -402,7 +594,14 @@ func _check_audio() -> void:
 	_audio.play_free_note(60, 100)
 	expect(not _audio.enabled and not _free._sound.button_pressed and notes.size() == 34 and _audio._free_held.is_empty(),
 		"global mute releases active Free Piano voices and blocks new playback")
+	var c := _keys.white_keys.find(60)
+	var end := _white_point(c + 3)
+	_suite._touch(_white_point(c), 0, true)
+	_drag(end, 0)
 	await _suite.create_timer(0.11).timeout
+	expect(notes.size() == 34 and _keys._pressed_notes() == [65] and _audio._free_held.is_empty(),
+		"muted glissando keeps the key feedback and starts no audio")
+	_suite._touch(end, 0, false)
 	expect(_audio._free_keys.all(func(voice: AudioStreamPlayer) -> bool: return not voice.playing),
 		"all Free Piano voices stop after mute")
 	if graphical:
@@ -414,8 +613,9 @@ func _check_audio() -> void:
 	_click(_free._sound)
 
 
-func _white_point(index: int) -> Vector2:
-	return _keys.global_position + Vector2(_keys.white_rect(index).get_center().x, _keys.size.y * 0.85)
+func _white_point(index: int, height_fraction := 0.85) -> Vector2:
+	var visible_face := _keys.white_rect(index).intersection(Rect2(Vector2.ZERO, _keys.size))
+	return _keys.global_position + Vector2(visible_face.get_center().x, _keys.size.y * height_fraction)
 
 
 func _drag(at: Vector2, index: int) -> void:

@@ -3,8 +3,9 @@ extends RefCounted
 const Notes := preload("res://scripts/notes.gd")
 const Chords := preload("res://scripts/chords.gd")
 const Exercises := preload("res://scripts/melody_exercises.gd")
+const Theory := preload("res://scripts/key_theory.gd")
 
-enum Mode { STAFF, NAMES, CHORDS, FREE_PIANO, MELODIES }
+enum Mode { STAFF, NAMES, CHORDS, FREE_PIANO, MELODIES, CIRCLE, HARMONY_LAB }
 
 var mode := Mode.STAFF
 var letter_names := false
@@ -18,6 +19,10 @@ var melody_kind := Exercises.Kind.ARPEGGIO
 var melody_difficulty := Exercises.Difficulty.BEGINNER
 var melody_length := Exercises.DEFAULT_LENGTH
 var melody_clef := Notes.Clef.TREBLE
+var circle_sector := 0
+var circle_flats := false
+var circle_minor := false
+var harmony_by_measure := true
 
 var _path: String
 
@@ -60,6 +65,14 @@ func load_settings() -> void:
 	var saved_clef: Variant = config.get_value("melodies", "clef", Notes.Clef.TREBLE)
 	melody_length = saved_length if saved_length is int and saved_length in Exercises.LENGTHS else Exercises.DEFAULT_LENGTH
 	melody_clef = saved_clef as Notes.Clef if saved_clef is int and saved_clef in Notes.Clef.values() else Notes.Clef.TREBLE
+	var sector: Variant = config.get_value("circle", "sector", 0)
+	var flats: Variant = config.get_value("circle", "prefer_flats", false)
+	var minor: Variant = config.get_value("circle", "minor", false)
+	circle_sector = sector if sector is int and sector >= 0 and sector < Theory.WHEEL.size() else 0
+	circle_flats = flats if flats is bool else false
+	circle_minor = minor if minor is bool else false
+	var by_measure: Variant = config.get_value("harmony", "by_measure", true)
+	harmony_by_measure = by_measure if by_measure is bool else true
 
 
 static func _free_number(config: ConfigFile, key: String, fallback: float, low: float, high: float) -> float:
@@ -101,6 +114,10 @@ func save() -> void:
 	config.set_value("melodies", "difficulty", melody_difficulty)
 	config.set_value("melodies", "length", melody_length)
 	config.set_value("melodies", "clef", melody_clef)
+	config.set_value("circle", "sector", circle_sector)
+	config.set_value("circle", "prefer_flats", circle_flats)
+	config.set_value("circle", "minor", circle_minor)
+	config.set_value("harmony", "by_measure", harmony_by_measure)
 	var temporary := _path + ".tmp"
 	var result := config.save(temporary)
 	if result == OK:

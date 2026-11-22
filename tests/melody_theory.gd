@@ -160,9 +160,10 @@ func _check_written_music(suite: SceneTree) -> void:
 		exercise.add_event(first, Exercises.QUARTER, [Exercises.SpelledNote.new(midi, 3)])
 	for midi in [66, 65, 66, 66]:
 		exercise.add_event(second, Exercises.QUARTER, [Exercises.SpelledNote.new(midi, 3)])
-	suite.expect(Exercises.accidental_signs(first, 1) == _signs([2, 0, 2, 2]), "natural scope and key signature spans octaves")
-	suite.expect(Exercises.accidental_signs(second, 1) == _signs([2, 0, 1, 2]), "bar reset and sharp reassertion")
-	suite.expect(Exercises.accidental_signs(second, 0) == _signs([1, 0, 1, 2]), "standalone sharp resets at bar line")
+	var none := Exercises.NO_SIGN
+	suite.expect(Exercises.accidental_signs(first, 1) == _signs([none, 0, none, none]), "natural scope and key signature spans octaves")
+	suite.expect(Exercises.accidental_signs(second, 1) == _signs([none, 0, 1, none]), "bar reset and sharp reassertion")
+	suite.expect(Exercises.accidental_signs(second, 0) == _signs([1, 0, 1, none]), "standalone sharp resets at bar line")
 	for clef: Notes.Clef in Notes.Clef.values():
 		var treble := clef == Notes.Clef.TREBLE
 		suite.expect(Exercises.signature_steps(2, clef) == ([8, 5] if treble else [6, 3]), "F and C sharp placement")

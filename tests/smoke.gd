@@ -10,12 +10,11 @@ const ChordBag := preload("res://scripts/chord_bag.gd")
 const ChordGame := preload("res://scripts/chord_game.gd")
 const ChordPiano := preload("res://scripts/chord_piano.gd")
 const PianoAudio := preload("res://scripts/piano_audio.gd")
-const HeaderButton := preload("res://scripts/header_button.gd")
 const MixedAudio := preload("res://tests/mixed_audio.gd")
 const FreePianoSmoke := preload("res://tests/free_piano_smoke.gd")
 const MelodySmoke := preload("res://tests/melody_smoke.gd")
 const CYCLES := 100
-const OUTPUT_DIR := "res://.godot/checks/smoke/0.5.1"
+const OUTPUT_DIR := "res://.godot/checks/smoke/0.7.2"
 const CANCELED_COMPLETION_WATCH_SECONDS := 2.43
 
 var failures := 0
@@ -50,7 +49,7 @@ func _run() -> void:
 	app = Main.instantiate()
 	app.preferences = Settings.new(settings_path)
 	root.add_child(app)
-	await process_frame
+	await _menu_layout_frame()
 	menu = app.get_node("Menu")
 	game = app.get_node("Game")
 	piano = game.get_node("Piano")
@@ -61,11 +60,9 @@ func _run() -> void:
 	expect(menu.visible and not game.visible, "startup shows menu")
 	expect(app.preferences.mode == Settings.Mode.STAFF and not app.preferences.letter_names and app.preferences.range_mask == 1,
 		"first-run settings")
-	expect(app.preferences.chord_mask == 3 and not menu._chord_heading.visible, "first-run chord settings are hidden")
+	expect(app.preferences.chord_mask == 3 and menu._home_scroll.visible and not menu._scroll.visible,
+		"first run shows the workspace with exercise settings closed")
 	expect(root.size.y > root.size.x, "launches in portrait")
-	expect(menu._staff_rows[0].is_visible_in_tree() and not menu._naming_rows[0].is_visible_in_tree(), "staff options visible")
-	expect(menu._start.get_global_rect().end.y <= menu.size.y, "start fits")
-	expect(menu._range_buttons[3].get_global_rect().end.y < menu._start.position.y, "all staff ranges fit above Start")
 	expect(ThemeDB.fallback_font.has_char("Й".unicode_at(0)), "bundled UI font includes Cyrillic")
 	if OS.get_name() == "Windows":
 		expect(Settings.new()._path == "res://.piano_settings.cfg", "Windows editor run uses project-local settings")
@@ -73,11 +70,20 @@ func _run() -> void:
 		await capture("menu")
 	await _check_credits()
 	await _check_audio_engine(settings_path)
+	await open_mode(Settings.Mode.STAFF)
+	expect(menu._settings_pages[Settings.Mode.STAFF].is_visible_in_tree(), "staff options visible")
+	expect(menu._start.get_global_rect().end.y <= menu.size.y, "start fits")
+	expect(menu._scroll.get_global_rect().end.y < menu._start.get_global_rect().position.y, "all staff ranges scroll above fixed Start")
 
+	await scroll_menu_to(menu._range_buttons[0])
 	click(menu._range_buttons[0].get_global_rect().get_center())
 	expect(app.preferences.range_mask == 1 and menu._range_buttons[0].button_pressed, "cannot disable last staff range")
+	await scroll_menu_to(menu._range_buttons[3])
 	click(menu._range_buttons[3].get_global_rect().get_center())
+	await scroll_menu_to(menu._range_buttons[0])
 	click(menu._range_buttons[0].get_global_rect().get_center())
+	menu._scroll.scroll_vertical = 0
+	await _menu_layout_frame()
 	expect(app.preferences.range_mask == 8, "can enable one range and disable another")
 
 	click(menu._start.get_global_rect().get_center())
@@ -145,10 +151,11 @@ func _run() -> void:
 	var last_staff_key: int = game._answer
 	click(game._menu.get_global_rect().get_center())
 	expect(menu.visible and not game.visible and game._answer == -1, "in-game menu returns to settings")
-	tap(menu._mode_buttons[1].get_global_rect().get_center())
-	expect(menu._naming_rows[0].is_visible_in_tree() and not menu._staff_rows[0].is_visible_in_tree(),
+	await open_mode(Settings.Mode.NAMES)
+	expect(menu._settings_pages[Settings.Mode.NAMES].is_visible_in_tree() and not menu._settings_pages[Settings.Mode.STAFF].is_visible_in_tree(),
 		"naming settings replace range controls")
-	_check_menu_radios()
+	await _menu_layout_frame()
+	await _check_menu_radios()
 	if DisplayServer.get_name() != "headless":
 		var selection_frame := await capture("naming-options")
 		_check_selection_borders(selection_frame)
@@ -182,12 +189,12 @@ func _run() -> void:
 	click(game._menu.get_global_rect().get_center())
 	expect(game._feedback.is_stopped(), "returning to menu cancels pending transition")
 
-	click(menu._mode_buttons[0].get_global_rect().get_center())
+	await open_mode(Settings.Mode.STAFF)
 	click(menu._start.get_global_rect().get_center())
 	expect(game._staff.visible and game._staff.range_index == 3 and game._answer != last_letter_key,
 		"switching back to staff rebuilds the enabled pool without repeating the key")
 	click(game._menu.get_global_rect().get_center())
-	click(menu._mode_buttons[1].get_global_rect().get_center())
+	await open_mode(Settings.Mode.NAMES)
 
 	var loaded := Settings.new(settings_path)
 	loaded.load_settings()
@@ -240,12 +247,8 @@ func _run() -> void:
 func _check_menu_radios() -> void:
 	var russian: Button = menu._naming_buttons[0]
 	var letters: Button = menu._naming_buttons[1]
-	var names: Button = menu._mode_buttons[Settings.Mode.NAMES]
-	var staff: Button = menu._mode_buttons[Settings.Mode.STAFF]
 	var russian_point := russian.get_global_rect().get_center()
 	var letters_point := letters.get_global_rect().get_center()
-	expect(names.button_group != null and russian.button_group != null and names.button_group != russian.button_group,
-		"mode and naming have independent radio groups")
 	for index in range(8):
 		var select_letters := index % 2 == 0
 		tap(letters_point if select_letters else russian_point)
@@ -257,15 +260,9 @@ func _check_menu_radios() -> void:
 	_touch(russian_point, 1, false)
 	_check_radio_group(menu._naming_buttons, letters if app.preferences.letter_names else russian)
 	var selected_naming: Button = letters if app.preferences.letter_names else russian
-	var staff_point := staff.get_global_rect().get_center()
-	var names_point := names.get_global_rect().get_center()
-	_touch(staff_point, 0, true)
-	_touch(names_point, 1, true)
-	_touch(names_point, 1, false)
-	_touch(staff_point, 0, false)
-	_check_radio_group(menu._mode_buttons, menu._mode_buttons[app.preferences.mode])
+	await open_mode(Settings.Mode.STAFF)
+	await open_mode(Settings.Mode.NAMES)
 	_check_radio_group(menu._naming_buttons, selected_naming)
-	tap(names_point)
 	tap(russian_point)
 	letters.grab_focus()
 	var motion := InputEventMouseMotion.new()
@@ -273,7 +270,6 @@ func _check_menu_radios() -> void:
 	motion.global_position = letters_point
 	root.push_input(motion, true)
 	expect(letters.has_focus() and letters.is_hovered(), "an unselected radio row can hold keyboard focus and hover")
-	_check_radio_group(menu._mode_buttons, names)
 	_check_radio_group(menu._naming_buttons, russian)
 
 
@@ -282,25 +278,22 @@ func _check_radio_group(rows: Array[Button], selected: Button) -> void:
 		"radio group points to the selected row")
 	for row in rows:
 		var active := row == selected
-		var normal := row.get_theme_stylebox("normal") as StyleBoxTexture
-		var hover := row.get_theme_stylebox("hover") as StyleBoxTexture
-		expect(row.button_group == selected.button_group and row.button_pressed == active
-			and row.get_node("Radio/Dot").visible == active, "radio dot and pressed state agree for " + row.text)
-		expect(normal.texture == (menu._selected.texture if active else menu._dark.texture)
-			and hover.texture == (menu._radio_selected_hover.texture if active else menu._radio_hover.texture)
-			and row.get_theme_stylebox("pressed") == normal and row.get_theme_stylebox("hover_pressed") == hover,
-			"all interaction states keep the correct selection border for " + row.text)
+		var normal := row.get_theme_stylebox("normal") as StyleBoxFlat
+		var pressed := row.get_theme_stylebox("pressed") as StyleBoxFlat
+		var hover := row.get_theme_stylebox("hover") as StyleBoxFlat
+		var hover_pressed := row.get_theme_stylebox("hover_pressed") as StyleBoxFlat
+		expect(row.button_group == selected.button_group and row.button_pressed == active,
+			"selection and pressed state agree for " + row.text)
+		expect(pressed.bg_color != normal.bg_color and hover_pressed.bg_color != hover.bg_color,
+			"the selected style stays distinct on hover for " + row.text)
 
 
 func _check_selection_borders(frame: Image) -> void:
-	for row: Button in menu._mode_buttons + menu._naming_buttons:
+	for row: Button in menu._naming_buttons:
 		var rect := row.get_global_rect()
-		var rim := Vector2i(root.get_final_transform() * Vector2(rect.position.x, rect.get_center().y))
-		var brightest := 0.0
-		for dx in range(3):
-			brightest = maxf(brightest, frame.get_pixel(rim.x + dx, rim.y).r)
-		expect((brightest > 0.55) == row.get_node("Radio/Dot").visible,
-			"rendered border matches the radio indicator for " + row.text)
+		var point := Vector2i(root.get_final_transform() * Vector2(rect.position.x + 10, rect.get_center().y))
+		expect((frame.get_pixelv(point).g > 0.25) == row.button_pressed,
+			"rendered fill matches the selected option for " + row.text)
 
 
 func _check_audio_engine(settings_path: String) -> void:
@@ -370,21 +363,24 @@ func _playing_count(voices: Array[AudioStreamPlayer]) -> int:
 func _check_sound_layout() -> void:
 	var menu_rect := menu.get_global_rect()
 	var toolbar: HBoxContainer = menu._toolbar
-	var title: Label = menu._title
+	var home: bool = menu._home_scroll.visible
+	var title: Label = menu._title if home else menu._headline
+	var scroll: ScrollContainer = menu._home_scroll if home else menu._scroll
 	var title_rect := title.get_global_rect()
 	expect(menu_rect.encloses(title_rect) and title_rect.size.x >= title.get_minimum_size().x,
 		"the portrait title fits without clipping")
-	expect(title.horizontal_alignment == HORIZONTAL_ALIGNMENT_LEFT
-		and is_equal_approx(title.position.x, menu._headline.position.x),
-		"the title is left-aligned with the menu content")
-	expect(is_equal_approx(menu_rect.end.x - toolbar.get_global_rect().end.x, menu._headline.position.x),
+	expect(title.horizontal_alignment == HORIZONTAL_ALIGNMENT_LEFT and (not home or title.text == "Nik's Piano"),
+		"the workspace header uses the full product name")
+	expect(absf(menu_rect.end.x - toolbar.get_global_rect().end.x - menu._frame.position.x) <= 1.0,
 		"the toolbar retains its right margin")
 	var previous_x := title_rect.end.x
 	for button: Button in toolbar.get_children():
+		if not button.visible:
+			continue
 		var rect := button.get_global_rect()
 		expect(menu_rect.encloses(rect) and rect.position.x >= previous_x
-			and rect.end.y <= menu._headline.position.y, "header icons fit beside the title above settings")
-		expect(rect.size == Vector2.ONE * HeaderButton.TARGET, "toolbar has consistent touch targets")
+			and rect.end.y <= scroll.get_global_rect().position.y, "header icons fit beside the title above content")
+		expect(rect.size == Vector2.ONE * 100, "toolbar has consistent touch targets")
 		previous_x = rect.end.x
 	var inset := Rect2(Vector2(42, 72), menu_rect.size - Vector2(92, 116))
 	expect(Finish.inset_bounds(menu_rect, inset) == inset, "safe insets constrain the header canvas")
@@ -413,9 +409,7 @@ func _check_game_sound(screen: Control, protected: Array, settings_path: String)
 
 func _check_credits() -> void:
 	var credits: Control = menu._credits
-	var flag: Button = menu._toolbar.get_node("Language")
-	click(flag.get_global_rect().get_center())
-	expect(flag.disabled and not credits.visible and menu.visible, "the flag is display-only")
+	expect(not menu._toolbar.has_node("Language") and not credits.visible, "the workspace has no language flag")
 	tap(menu._info.get_global_rect().get_center())
 	await process_frame
 	expect(credits.visible and menu.visible and root.size.y > root.size.x, "info opens a portrait overlay")
@@ -423,12 +417,12 @@ func _check_credits() -> void:
 	for child in credits._body.get_children():
 		if child is Label:
 			copy += child.text + "\n"
-	for name in ["Niks Piano", ProjectSettings.get_setting("application/config/version"), "Salamander Grand Piano V3", "Alexander Holm", "kinwie",
+	for name in ["Nik's Piano", ProjectSettings.get_setting("application/config/version"), "Salamander Grand Piano V3", "Alexander Holm", "kinwie",
 			"CC BY 3.0", "https://github.com/sfzinstruments/SalamanderGrandPiano",
 			"https://creativecommons.org/licenses/by/3.0/", "Bravura", "SIL Open Font License 1.1", "Godot Engine"]:
 		expect(copy.contains(name), "offline credits include %s" % name)
-	click(menu._start.get_global_rect().get_center())
-	expect(menu.visible and not game.visible, "modal blocks menu controls beneath it")
+	click(menu._mode_buttons[Settings.Mode.STAFF].get_global_rect().get_center())
+	expect(menu._home_scroll.visible and not game.visible, "modal blocks menu controls beneath it")
 	if DisplayServer.get_name() != "headless":
 		await capture("credits")
 	var scroll: ScrollContainer = credits._scroll
@@ -533,18 +527,20 @@ func _check_chord_game(settings_path: String) -> void:
 	var chord_game := app.get_node("ChordGame") as ChordGame
 	var keyboard: ChordPiano = chord_game._piano
 	var graphical := DisplayServer.get_name() != "headless"
-	click(menu._mode_buttons[Settings.Mode.CHORDS].get_global_rect().get_center())
+	await open_mode(Settings.Mode.CHORDS)
+	await _menu_layout_frame()
 	_check_sound_layout()
-	expect(menu._chord_heading.visible and not menu._staff_rows[0].visible and not menu._naming_rows[0].visible,
+	expect(menu._settings_pages[Settings.Mode.CHORDS].visible and not menu._settings_pages[Settings.Mode.STAFF].visible,
 		"chord options replace both note option sections")
 	for index in range(4):
 		var button: Button = menu._chord_buttons[index]
 		expect(button.visible and button.button_pressed == (index < 2), "default chord checkbox state")
-		expect(button.get_global_rect().end.y < menu._start.position.y, "chord row fits above Start")
+		expect(menu._scroll.get_global_rect().end.y < menu._start.get_global_rect().position.y, "chord options scroll above fixed Start")
 	if graphical:
 		await capture("chord-menu")
 
 	for index in [3, 0, 1, 3]:
+		await scroll_menu_to(menu._chord_buttons[index])
 		click(menu._chord_buttons[index].get_global_rect().get_center())
 	expect(app.preferences.chord_mask == 8 and menu._chord_buttons[3].button_pressed,
 		"chord groups are independent and the last group stays enabled")
@@ -942,6 +938,28 @@ func click_key(pitch: int) -> void:
 func white_key_point(pitch: int) -> Vector2:
 	var rect: Rect2 = piano.white_rect(pitch)
 	return piano.global_position + Vector2(rect.get_center().x, rect.end.y - 20.0)
+
+
+func scroll_menu_to(control: Control) -> void:
+	# Settle visibility changes before asking the container to expose the target.
+	await _menu_layout_frame()
+	var scroll: ScrollContainer = menu._home_scroll if menu._home_scroll.visible else menu._scroll
+	scroll.ensure_control_visible(control)
+	await _menu_layout_frame()
+
+
+func open_mode(mode: Settings.Mode) -> void:
+	if menu._scroll.visible:
+		click(menu._back.get_global_rect().get_center())
+	var button: Button = menu._mode_buttons[mode]
+	await scroll_menu_to(button)
+	click(button.get_global_rect().get_center())
+	await _menu_layout_frame()
+
+
+func _menu_layout_frame() -> void:
+	await process_frame
+	await process_frame
 
 
 func click(at: Vector2) -> void:

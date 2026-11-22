@@ -3,8 +3,10 @@ extends RefCounted
 const Chords := preload("res://scripts/chords.gd")
 const ChordBag := preload("res://scripts/chord_bag.gd")
 const Notes := preload("res://scripts/notes.gd")
+const Theory := preload("res://scripts/key_theory.gd")
 
 enum Kind { ARPEGGIO, PHRASE, INTERVAL }
+enum Study { MELODY, SCALE, TRIAD }
 enum Difficulty { BEGINNER, INTERMEDIATE, ADVANCED }
 
 const LENGTHS := [4, 8, 12, 16, 24]
@@ -19,15 +21,12 @@ const QUARTER := 2
 const HALF := 4
 const WHOLE := 8
 const TIME_SIGNATURE := Vector2i(4, 4)
-const SHARP_ORDER := [3, 0, 4, 1, 5, 2, 6]
-const FLAT_ORDER := [6, 2, 5, 1, 4, 0, 3]
-const NO_SIGN := 2
-const MAJOR_STEPS := [0, 2, 4, 5, 7, 9, 11]
-const MINOR_STEPS := [0, 2, 3, 5, 7, 8, 10]
+const NO_SIGN := 3
+# Each phrase choice identifies a wheel sector and whether to use its relative minor.
 const KEYS := [
-	[["C", 0, false, 0], ["A", 5, true, 0]],
-	[["G", 4, false, 1], ["F", 3, false, -1], ["E", 2, true, 1], ["D", 1, true, -1]],
-	[["D", 1, false, 2], ["Bb", 6, false, -2], ["B", 6, true, 2], ["G", 4, true, -2]],
+	[[0, false], [0, true]],
+	[[1, false], [11, false], [1, true], [11, true]],
+	[[2, false], [10, false], [2, true], [10, true]],
 ]
 
 # Each row has a four-attack miniature, five optional development bars, and a
@@ -92,7 +91,7 @@ class SpelledNote:
 		return Notes.diatonic_step(octave, letter, clef)
 
 	func written_name() -> String:
-		return "%s%s%d" % [Notes.LETTERS[letter], ["♭", "", "♯"][accidental + 1], octave]
+		return "%s%d" % [Theory.Tonality.spell(letter, accidental), octave]
 
 
 class Event:
@@ -112,6 +111,7 @@ class Measure:
 
 class Exercise:
 	var kind: Kind
+	var study := Study.MELODY
 	var difficulty: Difficulty
 	var selected_length: int
 	var clef: Notes.Clef
@@ -226,7 +226,7 @@ static func is_valid(exercise: Exercise) -> bool:
 		return false
 	match exercise.kind:
 		Kind.PHRASE:
-			if [exercise.key_name, exercise.tonic_letter, exercise.natural_minor, exercise.key_signature] not in KEYS[exercise.difficulty]:
+			if not _valid_phrase_key(exercise):
 				return false
 			for note in exercise.notes:
 				if note.accidental != signature_alteration(exercise.key_signature, note.letter):
@@ -253,18 +253,11 @@ static func first_midi(clef: Notes.Clef) -> int:
 
 
 static func signature_alteration(signature: int, letter: int) -> int:
-	var order := SHARP_ORDER if signature > 0 else FLAT_ORDER
-	var rank := order.find(letter)
-	return signi(signature) if rank < absi(signature) else 0
+	return Theory.Tonality.signature_alteration(signature, letter)
 
 
 static func signature_steps(signature: int, clef: Notes.Clef) -> Array[int]:
-	var treble := [8, 5, 9, 6, 3, 7, 4] if signature > 0 else [4, 7, 3, 6, 2, 5, 1]
-	var shift := 2 if clef == Notes.Clef.BASS else 0
-	var steps: Array[int] = []
-	for index in range(absi(signature)):
-		steps.append(int(treble[index]) - shift)
-	return steps
+	return Theory.signature_steps(signature, clef)
 
 
 static func allowed_chords(difficulty: Difficulty) -> Array:
@@ -274,11 +267,26 @@ static func allowed_chords(difficulty: Difficulty) -> Array:
 	return Chords.GROUPS[0] + Chords.GROUPS[1] + Chords.GROUPS[2] + Chords.GROUPS[3]
 
 
-static func _make_phrase(exercise: Exercise, key: Array, variation: int) -> void:
-	exercise.key_name = key[0]
-	exercise.tonic_letter = key[1]
-	exercise.natural_minor = key[2]
-	exercise.key_signature = key[3]
+static func _phrase_key(choice: Array) -> Theory.Tonality:
+	var major := Theory.major(choice[0])
+	return major.relative_minor() if choice[1] else major
+
+
+static func _valid_phrase_key(exercise: Exercise) -> bool:
+	for choice: Array in KEYS[exercise.difficulty]:
+		var key := _phrase_key(choice)
+		if exercise.key_signature == key.signature and exercise.tonic_letter == key.tonic_letter and (
+				exercise.natural_minor == key.minor and exercise.key_name == key.note_name(0).replace("♭", "b")):
+			return true
+	return false
+
+
+static func _make_phrase(exercise: Exercise, choice: Array, variation: int) -> void:
+	var key := _phrase_key(choice)
+	exercise.key_name = key.note_name(0).replace("♭", "b")
+	exercise.tonic_letter = key.tonic_letter
+	exercise.natural_minor = key.minor
+	exercise.key_signature = key.signature
 	exercise.template_id = "phrase-%d-%d" % [exercise.difficulty, variation + 1]
 	var form: Array = PHRASES[exercise.difficulty][variation]
 	var count := exercise.selected_length >> 2
@@ -288,10 +296,9 @@ static func _make_phrase(exercise: Exercise, key: Array, variation: int) -> void
 		development = UPPER_TONIC_DEVELOPMENT.get(variation, development)
 	var bars := [form[0]] if count == 1 else development.slice(0, count - 1) + [form.back()]
 	var offsets: Array[int] = []
-	var scale := MINOR_STEPS if exercise.natural_minor else MAJOR_STEPS
 	for bar: Array in bars:
 		for degree: int in bar:
-			offsets.append(scale[posmod(degree, 7)] + 12 * floori(degree / 7.0))
+			offsets.append(key.semitones_at(degree))
 	var low := first_midi(exercise.clef)
 	var tonic: int = low + Chords.WHITE_PITCHES[exercise.tonic_letter] + signature_alteration(
 		exercise.key_signature, exercise.tonic_letter)

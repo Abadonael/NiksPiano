@@ -54,7 +54,7 @@ func _ready() -> void:
 	_body.size_flags_horizontal = SIZE_EXPAND_FILL
 	_body.add_theme_constant_override("separation", 14)
 	_scroll.add_child(_body)
-	_add_line("Niks Piano", 42, Finish.WHITE, 0.85)
+	_add_line("Nik's Piano", 42, Finish.WHITE, 0.85)
 	_add_line("Версия %s" % ProjectSettings.get_setting("application/config/version"), 26, Finish.MUTED)
 	_add_heading("ЗВУК")
 	_add_line("Salamander Grand Piano V3", 31, Finish.WHITE, 0.75)
@@ -64,7 +64,7 @@ func _ready() -> void:
 	_add_line("https://github.com/sfzinstruments/SalamanderGrandPiano", 22)
 	_add_line("Лицензия", 23, Finish.MUTED)
 	_add_line("https://creativecommons.org/licenses/by/3.0/", 22)
-	_add_line("Для Niks Piano отобраны записи одного слоя динамики. Семплы подстроены, обрезаны, нормализованы по пику, обработаны плавным нарастанием и затуханием и преобразованы в стерео PCM (44,1 кГц, 16 бит). Промежуточные ноты воспроизводятся со сдвигом высоты.")
+	_add_line("Для Nik's Piano отобраны записи одного слоя динамики. Семплы подстроены, обрезаны, нормализованы по пику, обработаны плавным нарастанием и затуханием и преобразованы в стерео PCM (44,1 кГц, 16 бит). Промежуточные ноты воспроизводятся со сдвигом высоты.")
 	_add_heading("НОТНЫЙ ШРИФТ")
 	_add_line("Bravura", 31, Finish.WHITE, 0.75)
 	_add_line("© 2026 Steinberg Media Technologies GmbH. Reserved Font Name «Bravura». SIL Open Font License 1.1.")

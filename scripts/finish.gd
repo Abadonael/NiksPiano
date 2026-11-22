@@ -4,6 +4,7 @@ const MUSIC_FONT := preload("res://assets/Bravura.otf")
 const WHITE := Color("#ebedf1")
 const MUTED := Color("#a8adb5")
 const SUCCESS_GREEN := Color("#60c687")
+const TEAL := Color("#076b73")
 
 
 static func metal(
@@ -74,6 +75,23 @@ static func menu_button() -> Button:
 	button.add_theme_stylebox_override("hover", bright)
 	button.add_theme_stylebox_override("pressed", bright)
 	button.add_theme_stylebox_override("focus", flat(Color.TRANSPARENT, WHITE, 15, 2))
+	return button
+
+
+static func action_button(caption: String, points: int, emphasized := false) -> Button:
+	var button := Button.new()
+	button.text = caption
+	button.add_theme_font_size_override("font_size", points)
+	var fill := TEAL if emphasized else Color("#252a30")
+	var border := Color("#45949b") if emphasized else Color("#50575e")
+	var normal := flat(fill, border, 13, 1)
+	normal.set_content_margin_all(8.0)
+	var active := normal.duplicate() as StyleBoxFlat
+	active.bg_color = fill.lightened(0.12)
+	button.add_theme_stylebox_override("normal", normal)
+	button.add_theme_stylebox_override("hover", active)
+	button.add_theme_stylebox_override("pressed", active)
+	button.add_theme_stylebox_override("focus", flat(Color.TRANSPARENT, WHITE, 13, 2))
 	return button
 
 

@@ -90,7 +90,7 @@ func _answer_with(key: int) -> void:
 	if _chord == null or _completion != null or not _success.is_stopped():
 		return
 	audio.play_note(PianoAudio.C4 + key)
-	var pitch := key % Chords.PITCH_CLASSES
+	var pitch := _answer_pitch(key)
 	if pitch not in _chord.pitches:
 		_piano.mark_wrong(key)
 		return
@@ -104,6 +104,10 @@ func _answer_with(key: int) -> void:
 			_complete_with_sound()
 		else:
 			_success.start(SUCCESS_SECONDS)
+
+
+func _answer_pitch(key: int) -> int:
+	return key % Chords.PITCH_CLASSES
 
 
 func _complete_with_sound() -> void:

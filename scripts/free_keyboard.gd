@@ -14,18 +14,24 @@ const BLACK_HEIGHT := 0.67
 const C4_MARKER_COLOR := Color("#076B73")
 const MOUSE_POINTER := -1
 const NO_POINTER := -2
+const ATTACK_SPACING_USEC := 12000
+const ATTACK_WINDOW_USEC := 48000
+const CROSSING_EPSILON := 0.000001
 
 enum Gesture { TAP, PLAY, SCROLL, CANCELED }
 
 class Finger:
 	var origin: Vector2
-	var last_x: float
+	var previous: Vector2
 	var midi: int
 	var gesture: Gesture
+	var pending: Array[int] = []
+	var next_attack_usec := 0
+	var attack_deadline_usec := 0
 
 	func _init(point: Vector2, key: int, state: Gesture) -> void:
 		origin = point
-		last_x = point.x
+		previous = point
 		midi = key
 		gesture = state
 
@@ -55,6 +61,7 @@ func _init() -> void:
 
 
 func _ready() -> void:
+	set_process(false)
 	_white = Finish.metal(Color("#fcfcfe"), Color("#d9dde4"), Color("#ffffff"), 7.0)
 	_black = Finish.metal(Color("#292a2c"), Color("#070809"), Color("#55575c"), 8.0)
 	_white_down = Finish.metal(Color("#cbd0d7"), Color("#a2aab5"), Color("#e5e8ed"), 7.0)
@@ -65,7 +72,7 @@ func _ready() -> void:
 
 func _draw() -> void:
 	var first := maxi(0, floori(offset / key_width))
-	var last := mini(WHITE_COUNT, ceili((offset + size.x) / key_width))
+	var last := mini(white_keys.size(), ceili((offset + size.x) / key_width))
 	var pressed := _pressed_notes()
 	draw_rect(Rect2(Vector2.ZERO, size), Color("#0e1013"))
 	for index in range(first, last):
@@ -110,13 +117,13 @@ func key_at(point: Vector2) -> int:
 	var boundary := roundi(white_position)
 	if black_keys.has(boundary) and black_rect(boundary).has_point(point):
 		return black_keys[boundary]
-	return white_keys[clampi(floori(white_position), 0, WHITE_COUNT - 1)]
+	return white_keys[clampi(floori(white_position), 0, white_keys.size() - 1)]
 
 
 func _pressed_notes() -> Array[int]:
 	var result: Array[int] = []
 	for finger in _fingers.values():
-		if finger.gesture == Gesture.TAP or finger.gesture == Gesture.PLAY:
+		if finger.midi >= 0 and (finger.gesture == Gesture.TAP or finger.gesture == Gesture.PLAY):
 			result.append(finger.midi)
 	return result
 
@@ -145,16 +152,22 @@ func _touch(pointer: int, point: Vector2, pressed: bool, canceled: bool) -> void
 	var midi := key_at(point)
 	if midi < 0:
 		return
-	_fingers[pointer] = Finger.new(point, midi, Gesture.PLAY if locked else Gesture.TAP)
+	var finger := Finger.new(point, midi, Gesture.PLAY if locked else Gesture.TAP)
+	_fingers[pointer] = finger
 	if locked:
+		finger.next_attack_usec = Time.get_ticks_usec() + ATTACK_SPACING_USEC
 		note_pressed.emit(midi, pointer)
 	queue_redraw()
 
 
 func _move(pointer: int, point: Vector2) -> void:
-	if locked or not _fingers.has(pointer):
+	if not _fingers.has(pointer):
 		return
 	var finger := _fingers[pointer]
+	if locked:
+		if finger.gesture == Gesture.PLAY:
+			_play_drag(pointer, finger, point)
+		return
 	var displacement := point - finger.origin
 	if finger.gesture == Gesture.TAP or finger.gesture == Gesture.CANCELED:
 		if absf(displacement.x) >= drag_threshold and absf(displacement.x) > absf(displacement.y):
@@ -162,20 +175,110 @@ func _move(pointer: int, point: Vector2) -> void:
 			if _scroll_pointer == NO_POINTER:
 				_scroll_pointer = pointer
 				finger.gesture = Gesture.SCROLL
-				finger.last_x = finger.origin.x + signf(displacement.x) * drag_threshold
+				finger.previous.x = finger.origin.x + signf(displacement.x) * drag_threshold
 			queue_redraw()
 		elif finger.gesture == Gesture.TAP and absf(displacement.y) >= drag_threshold:
 			finger.gesture = Gesture.CANCELED
 			queue_redraw()
 	if finger.gesture == Gesture.SCROLL:
-		scrolled.emit(finger.last_x - point.x)
-		finger.last_x = point.x
+		scrolled.emit(finger.previous.x - point.x)
+		finger.previous = point
+
+
+func _play_drag(pointer: int, finger: Finger, point: Vector2) -> void:
+	var start := finger.previous
+	if start == point:
+		return
+	finger.previous = point
+	var had_pending := not finger.pending.is_empty()
+	var pending_count := finger.pending.size()
+	var delta := point - start
+	var crossings := _key_crossings(start, delta)
+	var previous_t := 0.0
+	# Hit testing is constant inside each interval between geometry edges.
+	for t in crossings:
+		if t - previous_t > CROSSING_EPSILON:
+			_enter_key(finger, key_at(start + delta * ((previous_t + t) * 0.5)))
+		previous_t = t
+	_enter_key(finger, key_at(point))
+	if finger.pending.size() == pending_count:
+		return
+	var now := Time.get_ticks_usec()
+	if not had_pending:
+		finger.attack_deadline_usec = now + ATTACK_WINDOW_USEC
+	_play_pending(pointer, finger, now)
+	if not finger.pending.is_empty():
+		set_process(true)
+	queue_redraw()
+
+
+func _key_crossings(start: Vector2, delta: Vector2) -> Array[float]:
+	var crossings: Array[float] = [1.0]
+	if delta.x != 0.0:
+		_add_crossing(crossings, start.x, delta.x, 0.0)
+		_add_crossing(crossings, start.x, delta.x, size.x)
+		var left := (start.x + minf(0.0, delta.x) + offset) / key_width
+		var right := (start.x + maxf(0.0, delta.x) + offset) / key_width
+		var first := maxi(1, ceili(left - BLACK_WIDTH * 0.5))
+		var last := mini(WHITE_COUNT - 1, floori(right + BLACK_WIDTH * 0.5))
+		for boundary in range(first, last + 1):
+			_add_crossing(crossings, start.x, delta.x, boundary * key_width - offset)
+			if black_keys.has(boundary):
+				var rect := black_rect(boundary)
+				_add_crossing(crossings, start.x, delta.x, rect.position.x)
+				_add_crossing(crossings, start.x, delta.x, rect.end.x)
+	if delta.y != 0.0:
+		_add_crossing(crossings, start.y, delta.y, 0.0)
+		_add_crossing(crossings, start.y, delta.y, size.y * BLACK_HEIGHT)
+		_add_crossing(crossings, start.y, delta.y, size.y)
+	crossings.sort()
+	return crossings
+
+
+func _add_crossing(crossings: Array[float], start: float, delta: float, edge: float) -> void:
+	var t := (edge - start) / delta
+	if t > 0.0 and t < 1.0:
+		crossings.append(t)
+
+
+func _enter_key(finger: Finger, midi: int) -> void:
+	if midi != finger.midi:
+		finger.midi = midi
+		finger.pending.append(midi)
+
+
+func _process(_delta: float) -> void:
+	var now := Time.get_ticks_usec()
+	var waiting := false
+	for pointer in _fingers.keys():
+		var finger := _fingers[pointer]
+		_play_pending(pointer, finger, now)
+		waiting = waiting or not finger.pending.is_empty()
+	set_process(waiting)
+
+
+func _play_pending(pointer: int, finger: Finger, now: int) -> void:
+	if finger.pending.is_empty() or (now < finger.next_attack_usec and now < finger.attack_deadline_usec):
+		return
+	# Spread sparse samples across mixer blocks where possible. Dense crossings
+	# share a block when needed to stay within the original batch's time budget.
+	var frame_usec := maxf(ATTACK_SPACING_USEC, get_process_delta_time() * 1000000.0)
+	var slots := 1 + floori(maxi(0, finger.attack_deadline_usec - now) / frame_usec)
+	var count := ceili(float(finger.pending.size()) / slots)
+	var attacks := finger.pending.slice(0, count)
+	finger.pending = finger.pending.slice(count)
+	finger.next_attack_usec = now + ATTACK_SPACING_USEC
+	for midi in attacks:
+		if midi >= 0:
+			note_pressed.emit(midi, pointer)
+		else:
+			note_released.emit(pointer)
 
 
 func _end(pointer: int, point: Vector2, canceled: bool) -> void:
 	if not _fingers.has(pointer):
 		return
-	if not canceled:
+	if not canceled and not locked:
 		_move(pointer, point)
 	var finger := _fingers[pointer]
 	_fingers.erase(pointer)
